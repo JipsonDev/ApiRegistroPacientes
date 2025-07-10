@@ -526,7 +526,7 @@
     </div>
 
     <script>
-      // Configuración de la API
+      // Configuración de la API - CORREGIDO PARA PRODUCCIÓN
       const API_BASE_URL = "https://apiregistropacientes.onrender.com";
 
       // Variables globales
@@ -715,6 +715,7 @@
             headers: {
               "Content-Type": "application/json",
             },
+            credentials: "include", // AÑADIDO: Para incluir cookies en requests CORS
             body: JSON.stringify({ username, password }),
           });
 
@@ -795,6 +796,7 @@
             headers: {
               "Content-Type": "application/json",
             },
+            credentials: "include", // AÑADIDO: Para incluir cookies en requests CORS
             body: JSON.stringify({ refresh_token: refreshToken }),
           });
 
@@ -864,6 +866,7 @@
                 Authorization: `Bearer ${currentToken}`,
                 "Content-Type": "application/json",
               },
+              credentials: "include", // AÑADIDO: Para incluir cookies en requests CORS
               body: JSON.stringify({ refresh_token: refreshToken }),
             });
           }
@@ -955,6 +958,7 @@
           return await fetch(url, {
             ...options,
             headers,
+            credentials: "include", // AÑADIDO: Para incluir cookies en requests CORS
           });
         };
 
@@ -1181,12 +1185,15 @@
         <div class="patient-actions">
             <button class="btn-small btn-edit" onclick="openEditModal(${
               patient.id
-            }, '${patient.nombre}', '${patient.sintoma}')">
+            }, '${patient.nombre.replace(
+              /'/g,
+              "\\'"
+            )}', '${patient.sintoma.replace(/'/g, "\\'")}')">
                 ✏️ Editar
             </button>
             <button class="btn-small btn-delete" onclick="deletePatient(${
               patient.id
-            }, '${patient.nombre}')">
+            }, '${patient.nombre.replace(/'/g, "\\'")}')">
                 🗑️ Eliminar
             </button>
         </div>
