@@ -2,17 +2,17 @@ services:
   - type: web
     name: api-registro-pacientes
     env: python
+    runtime: python
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn app:app
-    plan: free
     envVars:
-      - key: FLASK_ENV
-        value: production
+      - key: PYTHON_VERSION
+        value: "3.10.12"
       - key: APP_SECRET
         generateValue: true
       - key: ADMIN_PASSWORD
-        generateValue: true
+        value: "admin123"
       - key: MEDICO_PASSWORD
-        generateValue: true
+        value: "medico123"
       - key: ENFERMERO_PASSWORD
-        generateValue: true
+        value: "enfermero123"
