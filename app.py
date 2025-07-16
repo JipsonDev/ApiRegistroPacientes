@@ -19,12 +19,17 @@ app.secret_key = os.environ.get('SECRET_KEY', 'tu_clave_secreta_aqui')
 USERS_FILE = 'users.json'
 PATIENTS_FILE = 'patients.json'
 LOGS_FILE = 'logs.txt'
+LOGIN_ATTEMPTS_FILE = 'login_attempts.json'
 
 # Versión soportada
 SUPPORTED_VERSION = '1.0'
 
 # Configuración de token
 TOKEN_EXPIRY_MINUTES = 5
+
+# Configuración de bloqueo de login
+MAX_LOGIN_ATTEMPTS = 3
+LOCKOUT_DURATION_MINUTES = 5
 
 # Configuración de logging
 def setup_logging():
@@ -74,6 +79,98 @@ def write_log(ruta, resultado, usuario=None):
             'user': usuario
         }
     )
+
+# Funciones para manejar intentos de login
+def load_login_attempts():
+    """Carga los intentos de login desde archivo JSON"""
+    try:
+        if os.path.exists(LOGIN_ATTEMPTS_FILE):
+            with open(LOGIN_ATTEMPTS_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        return {}
+    except Exception as e:
+        print(f"Error cargando intentos de login: {e}")
+        return {}
+
+def save_login_attempts(attempts):
+    """Guarda los intentos de login en archivo JSON"""
+    try:
+        with open(LOGIN_ATTEMPTS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(attempts, f, indent=2, ensure_ascii=False)
+        return True
+    except Exception as e:
+        print(f"Error guardando intentos de login: {e}")
+        return False
+
+def get_login_attempts(username):
+    """Obtiene los intentos de login para un usuario específico"""
+    attempts = load_login_attempts()
+    return attempts.get(username, {
+        'failed_attempts': 0,
+        'blocked_until': None,
+        'last_attempt': None
+    })
+
+def increment_failed_attempts(username):
+    """Incrementa el contador de intentos fallidos para un usuario"""
+    attempts = load_login_attempts()
+    
+    if username not in attempts:
+        attempts[username] = {
+            'failed_attempts': 0,
+            'blocked_until': None,
+            'last_attempt': None
+        }
+    
+    attempts[username]['failed_attempts'] += 1
+    attempts[username]['last_attempt'] = datetime.now().isoformat()
+    
+    # Si alcanza el máximo de intentos, bloquear usuario
+    if attempts[username]['failed_attempts'] >= MAX_LOGIN_ATTEMPTS:
+        blocked_until = datetime.now() + timedelta(minutes=LOCKOUT_DURATION_MINUTES)
+        attempts[username]['blocked_until'] = blocked_until.isoformat()
+    
+    save_login_attempts(attempts)
+    return attempts[username]
+
+def reset_failed_attempts(username):
+    """Resetea los intentos fallidos para un usuario (login exitoso)"""
+    attempts = load_login_attempts()
+    
+    if username in attempts:
+        attempts[username] = {
+            'failed_attempts': 0,
+            'blocked_until': None,
+            'last_attempt': None
+        }
+        save_login_attempts(attempts)
+
+def is_user_blocked(username):
+    """Verifica si un usuario está bloqueado"""
+    user_attempts = get_login_attempts(username)
+    
+    if user_attempts['blocked_until']:
+        blocked_until = datetime.fromisoformat(user_attempts['blocked_until'])
+        if datetime.now() < blocked_until:
+            return True, blocked_until
+        else:
+            # El bloqueo ha expirado, resetear
+            reset_failed_attempts(username)
+            return False, None
+    
+    return False, None
+
+def get_remaining_lockout_time(username):
+    """Obtiene el tiempo restante de bloqueo en segundos"""
+    user_attempts = get_login_attempts(username)
+    
+    if user_attempts['blocked_until']:
+        blocked_until = datetime.fromisoformat(user_attempts['blocked_until'])
+        now = datetime.now()
+        if now < blocked_until:
+            return (blocked_until - now).total_seconds()
+    
+    return 0
 
 # Función para leer logs desde el archivo de texto
 def read_logs(limit=100):
@@ -292,27 +389,78 @@ def index():
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
+    # Initialize failed_attempts for GET requests and all scenarios
+    failed_attempts = 0
+    error_message = None
+    blocked_until = None
+    remaining_seconds = 0
+    
     if request.method == 'POST':
         username = request.form.get('username', '').strip()
         password = request.form.get('password', '')
         
         if not username or not password:
             flash('Usuario y contraseña son requeridos')
-            return render_template('login.html')
+            return render_template('login.html', 
+                                 failed_attempts=failed_attempts,
+                                 error_message=error_message,
+                                 blocked_until=blocked_until,
+                                 remaining_seconds=remaining_seconds)
+        
+        # Get current failed attempts for this user
+        user_attempts = get_login_attempts(username)
+        failed_attempts = user_attempts['failed_attempts']
+        
+        # Verificar si el usuario está bloqueado
+        is_blocked, blocked_until_dt = is_user_blocked(username)
+        if is_blocked:
+            remaining_time = get_remaining_lockout_time(username)
+            write_log('/login', f'ERROR - Usuario bloqueado: {username}', username)
+            return render_template('login.html', 
+                                 error_message=f'Cuenta bloqueada por {LOCKOUT_DURATION_MINUTES} minutos debido a demasiados intentos fallidos.',
+                                 blocked_until=blocked_until_dt.isoformat(),
+                                 remaining_seconds=remaining_time,
+                                 failed_attempts=failed_attempts)
         
         users = load_users()
         
         if username in users and check_password_hash(users[username]['password'], password):
+            # Login exitoso - resetear intentos fallidos
+            reset_failed_attempts(username)
             session['user_id'] = username
             session['username'] = username
             session['session_token'] = generate_session_token()
             write_log('/login', f'OK - Login exitoso', username)
             return redirect(url_for('dashboard'))
         else:
-            write_log('/login', f'ERROR - Credenciales incorrectas para {username}')
-            flash('Usuario o contraseña incorrectos')
+            # Login fallido - incrementar intentos fallidos
+            user_attempts = increment_failed_attempts(username)
+            failed_attempts = user_attempts['failed_attempts']
+            write_log('/login', f'ERROR - Credenciales incorrectas para {username} - Intento {failed_attempts}/{MAX_LOGIN_ATTEMPTS}', username)
+            
+            if failed_attempts >= MAX_LOGIN_ATTEMPTS:
+                # Usuario bloqueado
+                blocked_until_dt = datetime.fromisoformat(user_attempts['blocked_until'])
+                remaining_time = get_remaining_lockout_time(username)
+                return render_template('login.html', 
+                                     error_message=f'Demasiados intentos fallidos. Cuenta bloqueada por {LOCKOUT_DURATION_MINUTES} minutos.',
+                                     blocked_until=blocked_until_dt.isoformat(),
+                                     remaining_seconds=remaining_time,
+                                     failed_attempts=failed_attempts)
+            else:
+                # Mostrar advertencia
+                return render_template('login.html', 
+                                     error_message='Usuario o contraseña incorrectos.',
+                                     failed_attempts=failed_attempts,
+                                     blocked_until=blocked_until,
+                                     remaining_seconds=remaining_seconds)
     
-    return render_template('login.html')
+    # GET request - show login form with default values
+    return render_template('login.html', 
+                         failed_attempts=failed_attempts,
+                         error_message=error_message,
+                         blocked_until=blocked_until,
+                         remaining_seconds=remaining_seconds)
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
@@ -405,7 +553,28 @@ def check_token():
     else:
         return jsonify({"valid": False}), 401
 
-# API Endpoints para Postman
+# API para obtener información de bloqueo de usuario
+@app.route('/api/user_lockout_status/<username>', methods=['GET'])
+def api_user_lockout_status(username):
+    """API para verificar el estado de bloqueo de un usuario"""
+    is_blocked, blocked_until = is_user_blocked(username)
+    user_attempts = get_login_attempts(username)
+    
+    result = {
+        "username": username,
+        "is_blocked": is_blocked,
+        "failed_attempts": user_attempts['failed_attempts'],
+        "max_attempts": MAX_LOGIN_ATTEMPTS,
+        "lockout_duration_minutes": LOCKOUT_DURATION_MINUTES
+    }
+    
+    if is_blocked:
+        result["blocked_until"] = blocked_until.isoformat()
+        result["remaining_seconds"] = get_remaining_lockout_time(username)
+    
+    return jsonify(result), 200
+
+# API Endpoints para Postman con soporte para bloqueo
 @app.route('/api/register', methods=['POST'])
 @validate_version
 def api_register():
@@ -452,15 +621,47 @@ def api_login():
             write_log('/api/login', 'ERROR - Datos incompletos')
             return jsonify({"error": "Username y password requeridos"}), 400
         
+        # Verificar si el usuario está bloqueado
+        is_blocked, blocked_until = is_user_blocked(username)
+        if is_blocked:
+            remaining_time = get_remaining_lockout_time(username)
+            write_log('/api/login', f'ERROR - Usuario bloqueado API: {username}', username)
+            return jsonify({
+                "error": "Usuario bloqueado temporalmente",
+                "blocked_until": blocked_until.isoformat(),
+                "remaining_seconds": remaining_time,
+                "lockout_duration_minutes": LOCKOUT_DURATION_MINUTES
+            }), 423  # 423 Locked
+        
         users = load_users()
         
         if username in users and check_password_hash(users[username]['password'], password):
+            # Login exitoso
+            reset_failed_attempts(username)
             token = str(uuid.uuid4())  # Token simple para demo
             write_log('/api/login', f'OK - Login API exitoso', username)
             return jsonify({"message": "Login exitoso", "token": token}), 200
         else:
-            write_log('/api/login', f'ERROR - Credenciales incorrectas API para {username}')
-            return jsonify({"error": "Credenciales incorrectas"}), 401
+            # Login fallido
+            user_attempts = increment_failed_attempts(username)
+            write_log('/api/login', f'ERROR - Credenciales incorrectas API para {username} - Intento {user_attempts["failed_attempts"]}/{MAX_LOGIN_ATTEMPTS}', username)
+            
+            if user_attempts['failed_attempts'] >= MAX_LOGIN_ATTEMPTS:
+                # Usuario bloqueado
+                blocked_until = datetime.fromisoformat(user_attempts['blocked_until'])
+                remaining_time = get_remaining_lockout_time(username)
+                return jsonify({
+                    "error": "Usuario bloqueado por demasiados intentos fallidos",
+                    "blocked_until": blocked_until.isoformat(),
+                    "remaining_seconds": remaining_time,
+                    "lockout_duration_minutes": LOCKOUT_DURATION_MINUTES
+                }), 423  # 423 Locked
+            else:
+                return jsonify({
+                    "error": "Credenciales incorrectas",
+                    "failed_attempts": user_attempts['failed_attempts'],
+                    "max_attempts": MAX_LOGIN_ATTEMPTS
+                }), 401
     except Exception as e:
         print(f"Error en api_login: {e}")
         return jsonify({"error": "Error interno del servidor"}), 500
