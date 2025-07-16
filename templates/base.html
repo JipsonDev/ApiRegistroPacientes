@@ -65,6 +65,51 @@
         border-radius: 10px;
         border: none;
       }
+      .token-timer {
+        background: rgba(255, 193, 7, 0.1);
+        border: 1px solid rgba(255, 193, 7, 0.3);
+        border-radius: 8px;
+        padding: 8px 12px;
+        font-size: 0.9rem;
+        color: #856404;
+        transition: all 0.3s ease;
+      }
+      .token-timer.warning {
+        background: rgba(220, 53, 69, 0.1);
+        border-color: rgba(220, 53, 69, 0.3);
+        color: #721c24;
+      }
+      .token-timer.expired {
+        background: rgba(220, 53, 69, 0.2);
+        border-color: rgba(220, 53, 69, 0.5);
+        color: #721c24;
+      }
+      .session-actions {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        margin-left: 15px;
+      }
+      .btn-outline-warning {
+        border-color: #ffc107;
+        color: #ffc107;
+        font-size: 0.8rem;
+        padding: 4px 8px;
+      }
+      .btn-outline-warning:hover {
+        background-color: #ffc107;
+        color: #212529;
+      }
+      .btn-outline-danger {
+        border-color: #dc3545;
+        color: #dc3545;
+        font-size: 0.8rem;
+        padding: 4px 8px;
+      }
+      .btn-outline-danger:hover {
+        background-color: #dc3545;
+        color: white;
+      }
     </style>
   </head>
   <body>
@@ -74,7 +119,7 @@
         <a class="navbar-brand fw-bold" href="{{ url_for('index') }}">
           <i class="fas fa-heartbeat"></i> Sistema de Pacientes
         </a>
-        <div class="navbar-nav ms-auto">
+        <div class="navbar-nav ms-auto d-flex align-items-center">
           <button
             class="btn btn-outline-primary btn-sm me-3"
             onclick="generateQR()"
@@ -82,7 +127,22 @@
             <i class="fas fa-qrcode"></i> QR
           </button>
           {% if session.user_id %}
-          <span class="navbar-text me-3">Hola, {{ session.username }}!</span>
+          <div class="session-actions">
+            <div id="tokenTimer" class="token-timer">
+              <i class="fas fa-clock"></i>
+              <span id="timerText">Verificando sesión...</span>
+            </div>
+            <button
+              class="btn btn-outline-warning btn-sm"
+              onclick="refreshToken()"
+              id="refreshBtn"
+            >
+              <i class="fas fa-sync"></i> Renovar
+            </button>
+          </div>
+          <span class="navbar-text me-3 ms-3"
+            >Hola, {{ session.username }}!</span
+          >
           <a class="nav-link" href="{{ url_for('logout') }}">Cerrar Sesión</a>
           {% else %}
           <a class="nav-link" href="{{ url_for('login') }}">Iniciar Sesión</a>
@@ -165,12 +225,248 @@
       </div>
     </div>
 
+    <!-- Modal para sesión expirada -->
+    <div
+      class="modal fade"
+      id="sessionExpiredModal"
+      tabindex="-1"
+      aria-labelledby="sessionExpiredModalLabel"
+      aria-hidden="true"
+      data-bs-backdrop="static"
+      data-bs-keyboard="false"
+    >
+      <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+          <div class="modal-header bg-warning text-dark">
+            <h5 class="modal-title" id="sessionExpiredModalLabel">
+              <i class="fas fa-exclamation-triangle"></i> Sesión Expirada
+            </h5>
+          </div>
+          <div class="modal-body text-center">
+            <div class="alert alert-warning">
+              <i class="fas fa-clock"></i>
+              <strong>Su sesión ha expirado por inactividad.</strong>
+            </div>
+            <p>Por favor, elija una de las siguientes opciones:</p>
+            <div class="d-grid gap-2 d-md-flex justify-content-md-center">
+              <button
+                type="button"
+                class="btn btn-success"
+                onclick="refreshToken()"
+              >
+                <i class="fas fa-sync"></i> Renovar Sesión
+              </button>
+              <button
+                type="button"
+                class="btn btn-outline-secondary"
+                onclick="logout()"
+              >
+                <i class="fas fa-sign-out-alt"></i> Cerrar Sesión
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.1.3/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/js/all.min.js"></script>
 
     <script>
       let currentQRData = null;
+      let tokenCheckInterval = null;
+      let visualCountdownInterval = null;
+      let sessionExpiredModal = null;
+      let tokenExpirationTime = null;
 
+      // Inicializar sistema de tokens cuando el usuario está logueado
+      document.addEventListener("DOMContentLoaded", function () {
+        // Solo inicializar si el usuario está logueado
+        if (document.getElementById("tokenTimer")) {
+          sessionExpiredModal = new bootstrap.Modal(
+            document.getElementById("sessionExpiredModal")
+          );
+          startTokenCheck();
+        }
+      });
+
+      // Función para iniciar el monitoreo del token
+      function startTokenCheck() {
+        // Verificar inmediatamente
+        checkTokenStatus();
+
+        // Configurar verificación cada 30 segundos
+        tokenCheckInterval = setInterval(checkTokenStatus, 30000);
+      }
+
+      // Función para verificar el estado del token
+      function checkTokenStatus() {
+        fetch("/check_token")
+          .then((response) => response.json())
+          .then((data) => {
+            if (data.valid) {
+              // Calcular tiempo de expiración
+              tokenExpirationTime =
+                new Date().getTime() + data.remaining_seconds * 1000;
+              updateTokenDisplay(data.remaining_seconds);
+              startVisualCountdown();
+            } else {
+              handleTokenExpired();
+            }
+          })
+          .catch((error) => {
+            console.error("Error verificando token:", error);
+            updateTokenDisplay(0);
+          });
+      }
+
+      // Función para iniciar el contador visual
+      function startVisualCountdown() {
+        // Limpiar contador anterior si existe
+        if (visualCountdownInterval) {
+          clearInterval(visualCountdownInterval);
+        }
+
+        // Iniciar nuevo contador que se actualiza cada segundo
+        visualCountdownInterval = setInterval(() => {
+          const now = new Date().getTime();
+          const remainingMs = tokenExpirationTime - now;
+          const remainingSeconds = Math.max(0, Math.floor(remainingMs / 1000));
+
+          updateTokenDisplay(remainingSeconds);
+
+          // Si el tiempo se agotó, manejar expiración
+          if (remainingSeconds <= 0) {
+            clearInterval(visualCountdownInterval);
+            handleTokenExpired();
+          }
+        }, 1000);
+      }
+
+      // Función para actualizar la visualización del timer
+      function updateTokenDisplay(remainingSeconds) {
+        const timerElement = document.getElementById("tokenTimer");
+        const timerText = document.getElementById("timerText");
+
+        if (!timerElement || !timerText) return;
+
+        const minutes = Math.floor(remainingSeconds / 60);
+        const seconds = Math.floor(remainingSeconds % 60);
+
+        if (remainingSeconds <= 0) {
+          timerText.textContent = "Sesión expirada";
+          timerElement.className = "token-timer expired";
+        } else if (remainingSeconds <= 60) {
+          timerText.textContent = `${seconds}s restantes`;
+          timerElement.className = "token-timer warning";
+        } else {
+          timerText.textContent = `${minutes}:${seconds
+            .toString()
+            .padStart(2, "0")} restantes`;
+          timerElement.className = "token-timer";
+        }
+      }
+
+      // Función para manejar token expirado
+      function handleTokenExpired() {
+        // Limpiar todos los intervalos
+        if (tokenCheckInterval) {
+          clearInterval(tokenCheckInterval);
+          tokenCheckInterval = null;
+        }
+
+        if (visualCountdownInterval) {
+          clearInterval(visualCountdownInterval);
+          visualCountdownInterval = null;
+        }
+
+        if (sessionExpiredModal) {
+          sessionExpiredModal.show();
+        }
+      }
+
+      // Función para renovar token
+      function refreshToken() {
+        const refreshBtn = document.getElementById("refreshBtn");
+        const originalText = refreshBtn.innerHTML;
+
+        // Mostrar spinner
+        refreshBtn.innerHTML =
+          '<i class="fas fa-spinner fa-spin"></i> Renovando...';
+        refreshBtn.disabled = true;
+
+        fetch("/refresh_token", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+        })
+          .then((response) => response.json())
+          .then((data) => {
+            if (data.success) {
+              // Ocultar modal de sesión expirada si está abierto
+              if (sessionExpiredModal) {
+                sessionExpiredModal.hide();
+              }
+
+              // Mostrar mensaje de éxito
+              showAlert("Token renovado exitosamente", "success");
+
+              // Reiniciar el monitoreo del token
+              startTokenCheck();
+            } else {
+              showAlert("Error al renovar token: " + data.message, "danger");
+              setTimeout(() => {
+                window.location.href = "/login";
+              }, 2000);
+            }
+          })
+          .catch((error) => {
+            console.error("Error renovando token:", error);
+            showAlert("Error de conexión al renovar token", "danger");
+            setTimeout(() => {
+              window.location.href = "/login";
+            }, 2000);
+          })
+          .finally(() => {
+            // Restaurar botón
+            refreshBtn.innerHTML = originalText;
+            refreshBtn.disabled = false;
+          });
+      }
+
+      // Función para cerrar sesión
+      function logout() {
+        if (tokenCheckInterval) {
+          clearInterval(tokenCheckInterval);
+        }
+        if (visualCountdownInterval) {
+          clearInterval(visualCountdownInterval);
+        }
+        window.location.href = "/logout";
+      }
+
+      // Función para mostrar alertas
+      function showAlert(message, type) {
+        const alertDiv = document.createElement("div");
+        alertDiv.className = `alert alert-${type} alert-dismissible fade show`;
+        alertDiv.innerHTML = `
+          ${message}
+          <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        `;
+
+        const container = document.querySelector(".container");
+        container.insertBefore(alertDiv, container.firstChild);
+
+        // Auto-dismiss después de 5 segundos
+        setTimeout(() => {
+          if (alertDiv.parentNode) {
+            alertDiv.remove();
+          }
+        }, 5000);
+      }
+
+      // Función para generar QR (existente)
       function generateQR() {
         // Mostrar modal
         const modal = new bootstrap.Modal(document.getElementById("qrModal"));
@@ -201,6 +497,7 @@
           });
       }
 
+      // Función para descargar QR (existente)
       function downloadQR() {
         if (currentQRData) {
           const link = document.createElement("a");
@@ -209,6 +506,16 @@
           link.click();
         }
       }
+
+      // Limpiar intervalos al salir de la página
+      window.addEventListener("beforeunload", function () {
+        if (tokenCheckInterval) {
+          clearInterval(tokenCheckInterval);
+        }
+        if (visualCountdownInterval) {
+          clearInterval(visualCountdownInterval);
+        }
+      });
     </script>
   </body>
 </html>
