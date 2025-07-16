@@ -29,7 +29,7 @@ TOKEN_EXPIRY_MINUTES = 5
 
 # Configuración de bloqueo de login
 MAX_LOGIN_ATTEMPTS = 3
-LOCKOUT_DURATION_MINUTES = 5
+LOCKOUT_DURATION_MINUTES = 1
 
 # Configuración de logging
 def setup_logging():
