@@ -3,11 +3,12 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 import uuid
 import qrcode
 import io
 import base64
+import time
 
 app = Flask(__name__)
 app.secret_key = 'tu_clave_secreta_aqui'  # Cambia esto por una clave secreta segura
@@ -19,6 +20,9 @@ LOG_FILE = 'log.txt'
 
 # Versión soportada
 SUPPORTED_VERSION = '1.0'
+
+# Configuración de token
+TOKEN_EXPIRY_MINUTES = 5
 
 # Inicializar archivos si no existen
 def init_files():
@@ -45,6 +49,31 @@ def write_log(ruta, resultado, usuario=None):
     with open(LOG_FILE, 'a') as f:
         f.write(log_entry)
 
+# Función para generar token con expiración
+def generate_session_token():
+    return {
+        'token': str(uuid.uuid4()),
+        'expires_at': (datetime.now() + timedelta(minutes=TOKEN_EXPIRY_MINUTES)).isoformat(),
+        'created_at': datetime.now().isoformat()
+    }
+
+# Función para verificar si el token ha expirado
+def is_token_expired(token_data):
+    if not token_data or 'expires_at' not in token_data:
+        return True
+    
+    expires_at = datetime.fromisoformat(token_data['expires_at'])
+    return datetime.now() > expires_at
+
+# Función para renovar token
+def refresh_session_token():
+    if 'user_id' in session:
+        new_token = generate_session_token()
+        session['session_token'] = new_token
+        write_log('/refresh_token', f'OK - Token renovado', session.get('username'))
+        return new_token
+    return None
+
 # Decorador para validar versión
 def validate_version(f):
     @wraps(f)
@@ -69,13 +98,22 @@ def validate_version(f):
         return f(*args, **kwargs)
     return decorated_function
 
-# Decorador para verificar login
+# Decorador para verificar login y token
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if 'user_id' not in session:
             write_log(request.path, "ERROR - No autenticado")
             return redirect(url_for('login'))
+        
+        # Verificar token de sesión
+        token_data = session.get('session_token')
+        if not token_data or is_token_expired(token_data):
+            write_log(request.path, "ERROR - Token expirado", session.get('username'))
+            session.clear()
+            flash('Su sesión ha expirado. Por favor, inicie sesión nuevamente.')
+            return redirect(url_for('login'))
+        
         return f(*args, **kwargs)
     return decorated_function
 
@@ -119,6 +157,7 @@ def login():
         if username in users and check_password_hash(users[username]['password'], password):
             session['user_id'] = username
             session['username'] = username
+            session['session_token'] = generate_session_token()
             write_log('/login', f'OK - Login exitoso', username)
             return redirect(url_for('dashboard'))
         else:
@@ -165,6 +204,38 @@ def logout():
     session.clear()
     write_log('/logout', f'OK - Logout', username)
     return redirect(url_for('index'))
+
+# Ruta para refrescar token
+@app.route('/refresh_token', methods=['POST'])
+@login_required
+def refresh_token():
+    new_token = refresh_session_token()
+    if new_token:
+        return jsonify({
+            "success": True,
+            "message": "Token renovado exitosamente",
+            "expires_at": new_token['expires_at']
+        }), 200
+    else:
+        return jsonify({"success": False, "message": "Error al renovar token"}), 400
+
+# Ruta para verificar estado del token
+@app.route('/check_token', methods=['GET'])
+@login_required
+def check_token():
+    token_data = session.get('session_token')
+    if token_data:
+        expires_at = datetime.fromisoformat(token_data['expires_at'])
+        now = datetime.now()
+        remaining_seconds = (expires_at - now).total_seconds()
+        
+        return jsonify({
+            "valid": True,
+            "expires_at": token_data['expires_at'],
+            "remaining_seconds": max(0, remaining_seconds)
+        }), 200
+    else:
+        return jsonify({"valid": False}), 401
 
 # API Endpoints para Postman
 @app.route('/api/register', methods=['POST'])
