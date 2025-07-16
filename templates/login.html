@@ -10,7 +10,37 @@ Pacientes{% endblock %} {% block content %}
           Iniciar Sesión
         </h2>
 
-        <form method="POST">
+        <!-- Mensaje de error o bloqueo -->
+        {% if error_message %}
+        <div class="alert alert-danger" role="alert">
+          <i class="fas fa-exclamation-triangle"></i>
+          {{ error_message }}
+        </div>
+        {% endif %}
+
+        <!-- Mensaje de bloqueo -->
+        {% if blocked_until %}
+        <div class="alert alert-warning" role="alert">
+          <i class="fas fa-lock"></i>
+          <strong>Cuenta bloqueada temporalmente</strong><br />
+          Demasiados intentos fallidos. Inténtalo de nuevo en:
+          <span id="countdown" class="fw-bold"></span>
+        </div>
+        {% endif %}
+
+        <!-- Contador de intentos -->
+        {% if failed_attempts > 0 and failed_attempts < 3 %}
+        <div class="alert alert-warning" role="alert">
+          <i class="fas fa-exclamation-circle"></i>
+          Intentos fallidos: {{ failed_attempts }}/3
+          <br /><small
+            >Después de 3 intentos fallidos, la cuenta se bloqueará por 3
+            minutos</small
+          >
+        </div>
+        {% endif %}
+
+        <form method="POST" {% if blocked_until %}disabled{% endif %}>
           <div class="mb-3">
             <label for="username" class="form-label">Usuario</label>
             <input
@@ -19,6 +49,12 @@ Pacientes{% endblock %} {% block content %}
               id="username"
               name="username"
               required
+              {%
+              if
+              blocked_until
+              %}disabled{%
+              endif
+              %}
             />
           </div>
 
@@ -30,12 +66,28 @@ Pacientes{% endblock %} {% block content %}
               id="password"
               name="password"
               required
+              {%
+              if
+              blocked_until
+              %}disabled{%
+              endif
+              %}
             />
           </div>
 
           <div class="d-grid">
-            <button type="submit" class="btn btn-primary">
-              <i class="fas fa-sign-in-alt"></i> Iniciar Sesión
+            <button
+              type="submit"
+              class="btn btn-primary"
+              {%
+              if
+              blocked_until
+              %}disabled{%
+              endif
+              %}
+            >
+              <i class="fas fa-sign-in-alt"></i>
+              {% if blocked_until %}Bloqueado{% else %}Iniciar Sesión{% endif %}
             </button>
           </div>
         </form>
@@ -50,4 +102,29 @@ Pacientes{% endblock %} {% block content %}
     </div>
   </div>
 </div>
-{% endblock %}
+
+{% if blocked_until %}
+<script>
+  // Countdown timer para mostrar tiempo restante de bloqueo
+  function updateCountdown() {
+    const blockedUntil = new Date("{{ blocked_until }}").getTime();
+    const now = new Date().getTime();
+    const distance = blockedUntil - now;
+
+    if (distance > 0) {
+      const minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
+      const seconds = Math.floor((distance % (1000 * 60)) / 1000);
+
+      document.getElementById("countdown").innerHTML =
+        minutes + "m " + seconds + "s";
+    } else {
+      document.getElementById("countdown").innerHTML = "Recargando...";
+      location.reload(); // Recargar la página cuando termine el bloqueo
+    }
+  }
+
+  // Actualizar cada segundo
+  setInterval(updateCountdown, 1000);
+  updateCountdown(); // Ejecutar inmediatamente
+</script>
+{% endif %} {% endblock %}
