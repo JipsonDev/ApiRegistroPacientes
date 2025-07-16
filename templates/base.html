@@ -1,0 +1,214 @@
+<!-- templates/base.html -->
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>
+      {% block title %}Sistema de Gestión de Pacientes{% endblock %}
+    </title>
+    <link
+      href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.1.3/css/bootstrap.min.css"
+      rel="stylesheet"
+    />
+    <style>
+      body {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        min-height: 100vh;
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      }
+      .card {
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+        border: none;
+        border-radius: 15px;
+      }
+      .btn-primary {
+        background: linear-gradient(45deg, #667eea, #764ba2);
+        border: none;
+        border-radius: 25px;
+        padding: 12px 30px;
+        font-weight: 600;
+        transition: all 0.3s ease;
+      }
+      .btn-primary:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+      }
+      .navbar {
+        background: rgba(255, 255, 255, 0.95);
+        backdrop-filter: blur(10px);
+        box-shadow: 0 2px 20px rgba(0, 0, 0, 0.1);
+      }
+      .patient-card {
+        background: rgba(255, 255, 255, 0.95);
+        border-radius: 15px;
+        padding: 20px;
+        margin-bottom: 20px;
+        box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+        transition: all 0.3s ease;
+      }
+      .patient-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
+      }
+      .form-control {
+        border-radius: 10px;
+        border: 2px solid #e1e5e9;
+        padding: 12px 15px;
+        transition: all 0.3s ease;
+      }
+      .form-control:focus {
+        border-color: #667eea;
+        box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.25);
+      }
+      .alert {
+        border-radius: 10px;
+        border: none;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Navbar -->
+    <nav class="navbar navbar-expand-lg navbar-light">
+      <div class="container">
+        <a class="navbar-brand fw-bold" href="{{ url_for('index') }}">
+          <i class="fas fa-heartbeat"></i> Sistema de Pacientes
+        </a>
+        <div class="navbar-nav ms-auto">
+          <button
+            class="btn btn-outline-primary btn-sm me-3"
+            onclick="generateQR()"
+          >
+            <i class="fas fa-qrcode"></i> QR
+          </button>
+          {% if session.user_id %}
+          <span class="navbar-text me-3">Hola, {{ session.username }}!</span>
+          <a class="nav-link" href="{{ url_for('logout') }}">Cerrar Sesión</a>
+          {% else %}
+          <a class="nav-link" href="{{ url_for('login') }}">Iniciar Sesión</a>
+          <a class="nav-link" href="{{ url_for('register') }}">Registrarse</a>
+          {% endif %}
+        </div>
+      </div>
+    </nav>
+
+    <!-- Contenido principal -->
+    <div class="container mt-4">
+      {% with messages = get_flashed_messages() %} {% if messages %} {% for
+      message in messages %}
+      <div class="alert alert-info alert-dismissible fade show" role="alert">
+        {{ message }}
+        <button
+          type="button"
+          class="btn-close"
+          data-bs-dismiss="alert"
+        ></button>
+      </div>
+      {% endfor %} {% endif %} {% endwith %} {% block content %}{% endblock %}
+    </div>
+
+    <!-- Modal para mostrar QR -->
+    <div
+      class="modal fade"
+      id="qrModal"
+      tabindex="-1"
+      aria-labelledby="qrModalLabel"
+      aria-hidden="true"
+    >
+      <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title" id="qrModalLabel">
+              <i class="fas fa-qrcode"></i> Código QR de la Web
+            </h5>
+            <button
+              type="button"
+              class="btn-close"
+              data-bs-dismiss="modal"
+              aria-label="Close"
+            ></button>
+          </div>
+          <div class="modal-body text-center">
+            <div id="qrLoader" class="mb-3">
+              <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Generando QR...</span>
+              </div>
+              <p class="mt-2">Generando código QR...</p>
+            </div>
+            <div id="qrContent" style="display: none">
+              <img id="qrImage" class="img-fluid mb-3" alt="Código QR" />
+              <p class="text-muted">
+                Escanea este código para acceder a la web
+              </p>
+              <div class="alert alert-info">
+                <small id="qrUrl"></small>
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button
+              type="button"
+              class="btn btn-secondary"
+              data-bs-dismiss="modal"
+            >
+              Cerrar
+            </button>
+            <button
+              type="button"
+              class="btn btn-primary"
+              onclick="downloadQR()"
+            >
+              <i class="fas fa-download"></i> Descargar QR
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.1.3/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/js/all.min.js"></script>
+
+    <script>
+      let currentQRData = null;
+
+      function generateQR() {
+        // Mostrar modal
+        const modal = new bootstrap.Modal(document.getElementById("qrModal"));
+        modal.show();
+
+        // Mostrar loader
+        document.getElementById("qrLoader").style.display = "block";
+        document.getElementById("qrContent").style.display = "none";
+
+        // Hacer petición para generar QR
+        fetch("/generate_qr")
+          .then((response) => response.json())
+          .then((data) => {
+            currentQRData = data;
+
+            // Mostrar QR
+            document.getElementById("qrImage").src = data.qr_code;
+            document.getElementById("qrUrl").textContent = data.url;
+
+            // Ocultar loader y mostrar contenido
+            document.getElementById("qrLoader").style.display = "none";
+            document.getElementById("qrContent").style.display = "block";
+          })
+          .catch((error) => {
+            console.error("Error generando QR:", error);
+            document.getElementById("qrLoader").innerHTML =
+              '<div class="alert alert-danger">Error al generar el código QR</div>';
+          });
+      }
+
+      function downloadQR() {
+        if (currentQRData) {
+          const link = document.createElement("a");
+          link.download = "qr_sistema_pacientes.png";
+          link.href = currentQRData.qr_code;
+          link.click();
+        }
+      }
+    </script>
+  </body>
+</html>
